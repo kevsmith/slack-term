@@ -5,12 +5,43 @@ import (
 	"html"
 	"sort"
 	"strings"
+	"time"
 
-	"github.com/gizak/termui"
+	"github.com/erroneousboat/termui"
 
 	"github.com/erroneousboat/slack-term/config"
-	"github.com/erroneousboat/slack-term/service"
 )
+
+type Message struct {
+	Time    time.Time
+	Name    string
+	Content string
+
+	StyleTime string
+	StyleName string
+	StyleText string
+}
+
+func (m Message) ToString() string {
+	if (m.Time != time.Time{} && m.Name != "") {
+
+		return html.UnescapeString(
+			fmt.Sprintf(
+				"[[%s]](%s) [<%s>](%s) [%s](%s)",
+				m.Time.Format("15:04"),
+				m.StyleTime,
+				m.Name,
+				m.StyleName,
+				m.Content,
+				m.StyleText,
+			),
+		)
+	} else {
+		return html.UnescapeString(
+			fmt.Sprintf("[%s](%s)", m.Content, m.StyleText),
+		)
+	}
+}
 
 // Chat is the definition of a Chat component
 type Chat struct {
@@ -19,7 +50,7 @@ type Chat struct {
 }
 
 // CreateChat is the constructor for the Chat struct
-func CreateChat(svc *service.SlackService, inputHeight int, selectedSlackChannel interface{}, selectedChannel service.Channel) *Chat {
+func CreateChatComponent(inputHeight int) *Chat {
 	chat := &Chat{
 		List:   termui.NewList(),
 		Offset: 0,
@@ -27,9 +58,6 @@ func CreateChat(svc *service.SlackService, inputHeight int, selectedSlackChannel
 
 	chat.List.Height = termui.TermHeight() - inputHeight
 	chat.List.Overflow = "wrap"
-
-	chat.GetMessages(svc, selectedSlackChannel)
-	chat.SetBorderLabel(selectedChannel)
 
 	return chat
 }
@@ -53,11 +81,16 @@ func (c *Chat) Buffer() termui.Buffer {
 	lines := []Line{}
 	line := Line{}
 
+	// When we encounter a newline or are at the bounds of the chat view we
+	// stop iterating over the cells and add the line to the line array
 	x := 0
 	for _, cell := range cells {
 
+		// When we encounter a newline we add the line to the array
 		if cell.Ch == '\n' {
 			lines = append(lines, line)
+
+			// Reset for new line
 			line = Line{}
 			x = 0
 			continue
@@ -65,6 +98,8 @@ func (c *Chat) Buffer() termui.Buffer {
 
 		if x+cell.Width() > c.List.InnerBounds().Dx() {
 			lines = append(lines, line)
+
+			// Reset for new line
 			line = Line{}
 			x = 0
 		}
@@ -72,6 +107,9 @@ func (c *Chat) Buffer() termui.Buffer {
 		line.cells = append(line.cells, cell)
 		x++
 	}
+
+	// Append the last line to the array when we didn't encounter any
+	// newlines or were at the bounds of the chat view
 	lines = append(lines, line)
 
 	// We will print lines bottom up, it will loop over the lines
@@ -85,6 +123,7 @@ func (c *Chat) Buffer() termui.Buffer {
 
 	currentY := paneMaxY - 1
 	for i := (linesHeight - 1) - c.Offset; i >= 0; i-- {
+
 		if currentY < paneMinY {
 			break
 		}
@@ -153,15 +192,21 @@ func (c *Chat) SetY(y int) {
 	c.List.SetY(y)
 }
 
-// GetMessages will get an array of strings for a specific channel which will
-// contain messages in turn all these messages will be added to List.Items
-func (c *Chat) GetMessages(svc *service.SlackService, channel interface{}) {
-	// Get the count of message that fit in the pane
-	count := c.List.InnerBounds().Max.Y - c.List.InnerBounds().Min.Y
-	messages := svc.GetMessages(channel, count)
+// GetMaxItems return the maximal amount of items can fit in the Chat
+// component
+func (c *Chat) GetMaxItems() int {
+	return c.List.InnerBounds().Max.Y - c.List.InnerBounds().Min.Y
+}
 
-	for _, message := range messages {
-		c.AddMessage(message)
+// SetMessages will put the provided messages into the Items field of the
+// Chat view
+func (c *Chat) SetMessages(messages []string) {
+	// Reset offset first, when scrolling in view and changing channels we
+	// want the offset to be 0 when loading new messages
+	c.Offset = 0
+
+	for _, msg := range messages {
+		c.List.Items = append(c.List.Items, html.UnescapeString(msg))
 	}
 }
 
@@ -186,8 +231,8 @@ func (c *Chat) ScrollUp() {
 	c.Offset = c.Offset + 10
 
 	// Protect overscrolling
-	if c.Offset > len(c.List.Items)-1 {
-		c.Offset = len(c.List.Items) - 1
+	if c.Offset > len(c.List.Items) {
+		c.Offset = len(c.List.Items)
 	}
 }
 
@@ -208,16 +253,7 @@ func (c *Chat) ScrollDown() {
 }
 
 // SetBorderLabel will set Label of the Chat pane to the specified string
-func (c *Chat) SetBorderLabel(channel service.Channel) {
-	var channelName string
-	if channel.Topic != "" {
-		channelName = fmt.Sprintf("%s - %s",
-			channel.Name,
-			channel.Topic,
-		)
-	} else {
-		channelName = channel.Name
-	}
+func (c *Chat) SetBorderLabel(channelName string) {
 	c.List.BorderLabel = channelName
 }
 
